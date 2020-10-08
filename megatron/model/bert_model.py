@@ -124,6 +124,7 @@ class BertModel(MegatronModule):
         scaled_init_method = scaled_init_method_normal(args.init_method_std,
                                                        args.num_layers)
 
+        # key is just the name language model lmao
         self.language_model, self._language_model_key = get_language_model(
             attention_mask_func=bert_attention_mask_func,
             num_tokentypes=num_tokentypes,
@@ -131,6 +132,7 @@ class BertModel(MegatronModule):
             init_method=init_method,
             scaled_init_method=scaled_init_method)
 
+        # this is the actual language model waw
         self.lm_head = BertLMHead(
             self.language_model.embedding.word_embeddings.weight.size(0),
             args.hidden_size, init_method, args.layernorm_epsilon, parallel_output)

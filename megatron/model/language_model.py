@@ -266,13 +266,14 @@ class TransformerLanguageModel(MegatronModule):
                  output_layer_init_method,
                  num_tokentypes=0,
                  add_pooler=False):
+        # instantiates basic nn module and adds "state_dict_for_save_checkpoint" function
         super(TransformerLanguageModel, self).__init__()
         args = get_args()
 
-        self.hidden_size = args.hidden_size
+        self.hidden_size = args.hidden_size # size of feedforward in transformer i think
         self.num_tokentypes = num_tokentypes
-        self.init_method = init_method
-        self.add_pooler = add_pooler
+        self.init_method = init_method # method of instantiating tensors i.e. normal dist
+        self.add_pooler = add_pooler # used to pool information about an entire sentence
 
         # Embeddings
         self.embedding = Embedding(self.hidden_size,
