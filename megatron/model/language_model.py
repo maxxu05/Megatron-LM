@@ -42,7 +42,7 @@ def parallel_lm_logits(input_, word_embeddings_weight, parallel_output,
     return mpu.gather_from_model_parallel_region(logits_parallel)
 
 
-def get_language_model(attention_mask_func, num_tokentypes, add_pooler,
+def get_language_model(attention_mask_func, add_pooler,
                        init_method=None, scaled_init_method=None):
     """Build language model and return along with the key to save."""
     args = get_args()
@@ -58,7 +58,6 @@ def get_language_model(attention_mask_func, num_tokentypes, add_pooler,
         attention_mask_func=attention_mask_func,
         init_method=init_method,
         output_layer_init_method=scaled_init_method,
-        num_tokentypes=num_tokentypes,
         add_pooler=add_pooler)
     # key used for checkpoints.
     language_model_key = 'language_model'
@@ -101,8 +100,6 @@ class Embedding(MegatronModule):
                              is used for positional embedding
         embedding_dropout_prob: dropout probability for embeddings
         init_method: weight initialization method
-        num_tokentypes: size of the token-type embeddings. 0 value
-                        will ignore this embedding
     """
 
     def __init__(self,
@@ -110,13 +107,11 @@ class Embedding(MegatronModule):
                  vocab_size,
                  max_sequence_length,
                  embedding_dropout_prob,
-                 init_method,
-                 num_tokentypes=0):
+                 init_method:
         super(Embedding, self).__init__()
 
         self.hidden_size = hidden_size
         self.init_method = init_method
-        self.num_tokentypes = num_tokentypes
 
         # Word embeddings (parallel).
         self.word_embeddings = mpu.VocabParallelEmbedding(
@@ -130,37 +125,8 @@ class Embedding(MegatronModule):
         # Initialize the position embeddings.
         self.init_method(self.position_embeddings.weight)
 
-        # Token type embedding.
-        # Add this as an optional field that can be added through
-        # method call so we can load a pretrain model without
-        # token types and add them as needed.
-        self._tokentype_embeddings_key = 'tokentype_embeddings'
-        if self.num_tokentypes > 0:
-            self.tokentype_embeddings = torch.nn.Embedding(self.num_tokentypes,
-                                                           self.hidden_size)
-            # Initialize the token-type embeddings.
-            self.init_method(self.tokentype_embeddings.weight)
-        else:
-            self.tokentype_embeddings = None
-
         # Embeddings dropout
         self.embedding_dropout = torch.nn.Dropout(embedding_dropout_prob)
-
-    def add_tokentype_embeddings(self, num_tokentypes):
-        """Add token-type embedding. This function is provided so we can add
-        token-type embeddings in case the pretrained model does not have it.
-        This allows us to load the model normally and then add this embedding.
-        """
-        if self.tokentype_embeddings is not None:
-            raise Exception('tokentype embeddings is already initialized')
-        if torch.distributed.get_rank() == 0:
-            print('adding embedding for {} tokentypes'.format(num_tokentypes),
-                  flush=True)
-        self.num_tokentypes = num_tokentypes
-        self.tokentype_embeddings = torch.nn.Embedding(num_tokentypes,
-                                                       self.hidden_size)
-        # Initialize the token-type embeddings.
-        self.init_method(self.tokentype_embeddings.weight)
 
     def forward(self, input_ids, position_ids, tokentype_ids=None):
         # Embeddings.
@@ -188,10 +154,6 @@ class Embedding(MegatronModule):
         state_dict_[self._position_embeddings_key] \
             = self.position_embeddings.state_dict(
                 destination, prefix, keep_vars)
-        if self.num_tokentypes > 0:
-            state_dict_[self._tokentype_embeddings_key] \
-                = self.tokentype_embeddings.state_dict(
-                    destination, prefix, keep_vars)
 
         return state_dict_
 
@@ -222,24 +184,6 @@ class Embedding(MegatronModule):
                         = state_dict[key]
         self.position_embeddings.load_state_dict(state_dict_, strict=strict)
 
-        # Tokentype embedding.
-        if self.num_tokentypes > 0:
-            state_dict_ = {}
-            if self._tokentype_embeddings_key in state_dict:
-                state_dict_ = state_dict[self._tokentype_embeddings_key]
-            else:
-                # for backward compatibility.
-                for key in state_dict.keys():
-                    if 'tokentype_embeddings' in key:
-                        state_dict_[key.split('tokentype_embeddings.')[1]] \
-                            = state_dict[key]
-            if len(state_dict_.keys()) > 0:
-                self.tokentype_embeddings.load_state_dict(state_dict_,
-                                                          strict=strict)
-            else:
-                print('***WARNING*** expected tokentype embeddings in the '
-                      'checkpoint but could not find it', flush=True)
-
 
 class TransformerLanguageModel(MegatronModule):
     """Transformer language model.
@@ -256,32 +200,28 @@ class TransformerLanguageModel(MegatronModule):
         max_sequence_length: maximum size of sequence. This
                              is used for positional embedding
         embedding_dropout_prob: dropout probability for embeddings
-        num_tokentypes: size of the token-type embeddings. 0 value
-                        will ignore this embedding
     """
 
     def __init__(self,
                  attention_mask_func,
                  init_method,
                  output_layer_init_method,
-                 num_tokentypes=0,
                  add_pooler=False):
         # instantiates basic nn module and adds "state_dict_for_save_checkpoint" function
         super(TransformerLanguageModel, self).__init__()
         args = get_args()
 
         self.hidden_size = args.hidden_size # size of feedforward in transformer i think
-        self.num_tokentypes = num_tokentypes
         self.init_method = init_method # method of instantiating tensors i.e. normal dist
         self.add_pooler = add_pooler # used to pool information about an entire sentence
 
         # Embeddings
+        # needs to be modified to remove vocab + token embeddings but keep positional
         self.embedding = Embedding(self.hidden_size,
                                    args.padded_vocab_size,
                                    args.max_position_embeddings,
                                    args.hidden_dropout,
-                                   self.init_method,
-                                   self.num_tokentypes)
+                                   self.init_method)
         self._embedding_key = 'embedding'
 
         # Transformer

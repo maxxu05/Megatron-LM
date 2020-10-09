@@ -112,7 +112,7 @@ class BertLMHead(MegatronModule):
 class BertModel(MegatronModule):
     """Bert Language model."""
 
-    def __init__(self, num_tokentypes=2, add_binary_head=True,
+    def __init__(self, add_binary_head=True,
                  parallel_output=True):
         super(BertModel, self).__init__()
         args = get_args()
@@ -125,18 +125,21 @@ class BertModel(MegatronModule):
                                                        args.num_layers)
 
         # key is just the name language model lmao
+        # this includes the tokenizer embedding layer + transformer
         self.language_model, self._language_model_key = get_language_model(
             attention_mask_func=bert_attention_mask_func,
-            num_tokentypes=num_tokentypes,
             add_pooler=self.add_binary_head,
             init_method=init_method,
             scaled_init_method=scaled_init_method)
 
-        # this is the actual language model waw
+        # this is a head? i guess? what?
+        # calculating logits
         self.lm_head = BertLMHead(
             self.language_model.embedding.word_embeddings.weight.size(0),
             args.hidden_size, init_method, args.layernorm_epsilon, parallel_output)
         self._lm_head_key = 'lm_head'
+        # i this this is the binary head used for next sentence prediction? not sure
+        # it is another head that operates only on the pooled output to guess something
         if self.add_binary_head:
             self.binary_head = get_linear_layer(args.hidden_size, 2,
                                                 init_method)
